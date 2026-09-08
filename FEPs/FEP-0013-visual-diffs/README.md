@@ -5,9 +5,9 @@
 | Type           | Core Change                                                                                                     |
 | Status         | Draft                                                                                                           |
 | Author(s)      | Pieter Hijma @pieterhijma                                                                                       |
-| Version        | 0.1                                                                                                             |
+| Version        | 0.2                                                                                                             |
 | Created        | 2026-08-19                                                                                                      |
-| Updated        | 2026-08-19                                                                                                      |
+| Updated        | 2026-09-05                                                                                                      |
 | Discussion     | [💬 Discussion FEP-0013: Visual Diffs](https://github.com/FreeCAD/FreeCAD-Enhancement-Proposals/discussions/56) |
 | Implementation | n/a                                                                                                             |
 
@@ -88,8 +88,8 @@ FreeCAD.
 ### Diff module with a --diff flag (PR #31593)
 
 PR #31593 [(2)](#ref2) introduces a Diff modules and a `--diff` flag and
-compares files objects and properties.  This is a good approach for obtaining a
-shared API for diffs and allowing versioning software such as Git to make use
+compares files, objects, and properties.  This is a good approach for obtaining
+a shared API for diffs and allowing versioning software such as Git to make use
 of FreeCAD as a diff tool.
 
 A drawback of this approach is that it requires to compute the visual diff for
@@ -98,8 +98,8 @@ each and every object, an operation that is potentially very expensive.
 ### History workbench
 
 The History Workbench [(3)](#ref3) provides FreeCAD users with a workflow for
-versioning FreeCAD files.  It uses Git in the backend, but hardly need to be
-aware of that.  Although this approach offers more than what could be
+versioning FreeCAD files.  It uses Git in the backend, but users hardly need to
+be aware of that.  Although this approach offers more than what could be
 considered generic functionality for visual diffs, it provides a dialog with
 the differences in the object tree and property changes in a visual way.  From
 this dialog users can choose to visualize diffs between objects.
@@ -115,8 +115,9 @@ conflicts in FreeCAD files, we leave this to future work.
 The chosen direction is a mix between the Diff module with a `--diff` flag and
 the history workbench with small core and file format changes.  Given two open
 files, the Diff module provides a button that brings up the "Tree Comparison
-Dialog" that shows an overview of a combination of the object tree of the two
-files highlighting similar, added, and removed objects.  Selecting the document
+Dialog" that shows an overview of the object trees of the two files that are to
+be compared.  The dialog shows the two object trees combined in a single view
+in which similar, added, and removed objects are shown.  Selecting the document
 or an object brings up a table of the properties that highlights visually which
 properties have changed or are added or removed.
 
@@ -133,11 +134,14 @@ details for accomplishing this.
 
 For many use-cases, it is impractical to load multiple versions of the same
 file in FreeCAD.  As an example, consider a user who wants to compare a current
-FreeCAD file with a version from a previous commit and then with the second
-previous commit.  Because of this, it is useful to be able to read a FreeCAD
-file without actually opening it in FreeCAD.  The Python API will provide
-functionality for reading FreeCAD files without opening them as FreeCAD
-documents.
+FreeCAD file first with a version from a previous commit, and then with the
+version from the commit before that.  Since the three versions can link to the
+same file that has changes between those versions as well, it is challenging to
+fully open all these files.
+
+Because of this, it is useful to be able to read a FreeCAD file without
+actually opening it in FreeCAD.  The Python API will provide functionality for
+reading FreeCAD files without opening them as FreeCAD documents.
 
 ### FreeCAD file format changes
 
@@ -156,6 +160,12 @@ extended to store the tree view hierarchy.  This is only optional information,
 not required to load FreeCAD, but given this information, it is possible to
 know what the tree view looked like when the file was saved.
 
+Additionally, the property group for static properties is not stored in
+FreeCAD's `Document.xml` and `GuiDocument.xml`.  Instead, the group of a
+property is statically defined in the FreeCAD code, making it impossible to
+know to which group a property belongs from just the information in th eFreeCAD
+file.  For presentation purposes, the FreeCAD document will store this group
+information as a hint.
 
 ## Specification
 
@@ -184,7 +194,8 @@ For the objects that are different and for the documents, FreeCAD will print
 information about the properties, namely:
 1. The properties only in the first document or object
 2. The properties only in the second document or object
-3. The properties that are different with their values.
+3. The properties that are different together with their values and
+   expressions.
 
 In the **GUI mode**, FreeCAD will start opening the two files, activate the
 Diff workbench and show the Tree Comparison Dialog.  For an explanation of this
@@ -213,11 +224,14 @@ that `Length` has changed from 5.00 mm to 15.00 mm where the latter value
 originates from a new expression.
 
 The object entries in the tree view in the left pane have an icon that allows
-users to inspect the object visually.  Clicking the icon of such an object
-opens a new temporary file with a visual diff of that object in the 3D view for
-the user to inspect.  Please note that it is possible to show the visual diffs
-of separate features, for example the `Pocket_BatteryCutout` is possible but
-also larger objects, such as `VarioBatterySpacer_Body`.
+users to inspect the object visually.  This icon only appears if the shape of
+the specific object has changed compared to the previous version.
+
+Clicking the icon of such an object opens a new temporary file with a visual
+diff of that object in the 3D view for the user to inspect.  Please note that
+it is possible to show the visual diffs of separate features, for example the
+`Pocket_BatteryCutout` is possible but also larger objects, such as
+`VarioBatterySpacer_Body`.
 
 ### Python API
 
@@ -234,8 +248,13 @@ presentation, such as showing the comparison tree and visual diffs.
 
 
 The `App` part of the Diff module provides functionality to:
-- read a FreeCAD file and extract relevant information without opening the file
-  in FreeCAD,
+- read a FreeCAD file and extract information without opening the file in
+  FreeCAD, such as:
+  - group information of properties
+  - tree view information
+  - BRep information:
+    - which BRep file to load
+    - a hash for shape equality (see below)
 - compare properties: list added properties, removed properties, and changed
   properties taking into account expressions,
 - compare objects: list the changed properties of an object,
@@ -265,17 +284,50 @@ viewprovider and expanded is either "1" or "0" aligning with whether the tree
 is expanded in the document or not.  The `TreeNode` nodes can contain
 `TreeNode` nodes with which the tree view can be recreated statically.
 
+Similarly, since it is not possible to statically determine the group of a
+property without opening a file in FreeCAD, the `Property` element in
+`Document.xml` and `GuiDocument.xml` obtain a new attribute `groupHint` with
+value the group of the static property at the time that the file was saved.
+This allows viewers such as the Diff module to present the properties with
+their group without loading the file in FreeCAD.
+
 Note that this information is not necessary to load a FreeCAD file in FreeCAD;
-FreeCAD will determine the parent/child relations at runtime.  This information
-is only useful when the structure of the tree view is required without loading
-the file.  The `TreeData` section will be written in `GuiDocument.xml` when a
-FreeCAD file is saved.
+FreeCAD will determine the parent/child relations and the property groups at
+runtime.  This information is only useful when the structure of the tree view
+is required without loading the file.  The `TreeData` section will be written
+in `GuiDocument.xml` when a FreeCAD file is saved.
 
 When a file is opened that does not have the tree data information (a file
 created with a previous FreeCAD version), the Diff module will heuristically
 recreate the Tree View by analyzing the object dependencies and observing the
-`treeRank` attribute in `GuiDocument.xml`.
+`treeRank` attribute in `GuiDocument.xml`.  Similarly, the groups of static
+properties will appear as part of group `Base`.
 
+### Shape hash
+
+To detect whether shapes have changed across versions, we make use of
+OpenCascade's `GeomHash` package that computes a hash of geometry with which we
+can compare shapes.
+
+### Impact on existing features / subsystems
+
+The impact on existing features and subsystems is limited because the
+functionality is mostly in a new Diff module.  However, some core changes are
+necessary of which we discuss the impact below.
+
+The core of FreeCAD is extended with a `--diff` flag.  This is added
+functionality that does not affect existing features or subsystems.
+
+The core of FreeCAD will also be extended with geometry hashing functionality
+obtained from OpenCascade.  This will be exposed to Python.  Since this is only
+an addition, existing features and subsystems are not affected.
+
+The file format is extended but only with redundant information.  All other
+subsystems can safely ignore the information or make use of it.
+
+### Backwards Compatibility
+
+Backwards compatibility is not affected.
 
 ## Implementation
 
@@ -289,9 +341,14 @@ inspiration for the GUI components.
 Since both approaches show most of the functionality that has been specified
 above, the feasibility of this proposal is guaranteed.
 
+Since Geometry Hashing is only available in Open Cascade 7.9 and higher, the
+Diff module will need to detect whether this functionality is available.
+
+
 ## Changelog
 
-- 0.1 - Initial version
+- [0.1](https://github.com/pieterhijma/FreeCAD-Enhancement-Proposals/blob/978390a045733dc52067677d2097a5a128e3363b/FEPs/FEP-0013-visual-diffs/README.md) - Initial version
+- 0.2 - Add features based on discussion
 
 ## References
 
